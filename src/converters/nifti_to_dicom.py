@@ -2,11 +2,81 @@ import os
 import logging
 import numpy as np
 import pydicom
-import SimpleITK as sitk
+import nibabel as nib
 from pathlib import Path
-from pydicom.uid import generate_uid
+from pydicom.uid import generate_uid, ExplicitVRLittleEndian
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+def load_reference_series(reference_dicom):
+    """
+    Load and sort the entire reference DICOM series.
+    
+    Args:
+        reference_dicom (pydicom.dataset.FileDataset): A reference DICOM from the series
+        
+    Returns:
+        list: sorted list of DICOM datasets
+    """
+    reference_dir = Path(reference_dicom.filename).parent
+    series_uid = reference_dicom.SeriesInstanceUID
+    
+    # Find all DICOMs from the same series
+    series_files = []
+    for file in reference_dir.glob('*.dcm'):
+        try:
+            ds = pydicom.dcmread(str(file), stop_before_pixels=True)
+            if hasattr(ds, 'SeriesInstanceUID') and ds.SeriesInstanceUID == series_uid:
+                series_files.append((ds, file))
+        except Exception as e:
+            logger.warning(f"Skipping file {file}: {str(e)}")
+    
+    if not series_files:
+        raise ValueError(f"No valid DICOM files found in series {series_uid}")
+    
+    # Sort by InstanceNumber (for slice order)
+    sorted_files = sorted(series_files, key=lambda x: int(x[0].InstanceNumber))
+    return [dcm for dcm, _ in sorted_files]
+
+def reorient_nifti_data(nifti_img):
+    """
+    Reorient NIFTI data to match DICOM orientation.
+    
+    Args:
+        nifti_img (nibabel.Nifti1Image): Input NIFTI image
+        
+    Returns:
+        tuple: (reoriented data array, number of slices)
+    """
+    # Get the orientation from the affine
+    affine = nifti_img.affine
+    nifti_data = nifti_img.get_fdata()
+    
+    # Log original shape and affine for debugging
+    logger.info(f"Original NIFTI shape: {nifti_data.shape}")
+    logger.info(f"NIFTI affine:\n{affine}")
+    
+    # Determine the slice axis (usually the z-axis)
+    # The axis with the largest spacing is typically the slice axis
+    voxel_spacing = np.sqrt(np.sum(affine[:3, :3] ** 2, axis=0))
+    slice_axis = np.argmax(voxel_spacing)
+    logger.info(f"Detected slice axis: {slice_axis}")
+    
+    # Reorder axes if necessary to ensure slice axis is last
+    if slice_axis != 2:
+        # Create the transpose order to move slice_axis to the end
+        transpose_order = list(range(3))
+        transpose_order.pop(slice_axis)
+        transpose_order.append(slice_axis)
+        logger.info(f"Transposing axes with order: {transpose_order}")
+        nifti_data = np.transpose(nifti_data, transpose_order)
+    
+    # Get the final number of slices
+    n_slices = nifti_data.shape[-1]
+    logger.info(f"Final shape after reorientation: {nifti_data.shape}")
+    
+    return nifti_data, n_slices
 
 def nifti_to_dicom(nifti_path, reference_dicom, out_folder, series_uid):
     """
@@ -22,104 +92,138 @@ def nifti_to_dicom(nifti_path, reference_dicom, out_folder, series_uid):
         bool: True if successful, False otherwise.
     """
     try:
-        # Read NIFTI file
+        # Create output directory if it doesn't exist
+        if not os.path.exists(out_folder):
+            os.makedirs(out_folder)
+
+        # Load the entire reference series
+        logger.info("Loading reference DICOM series...")
+        reference_series = load_reference_series(reference_dicom)
+        n_slices_dicom = len(reference_series)
+        logger.info(f"Loaded {n_slices_dicom} reference DICOM files")
+        
+        # Load the NIfTI file
         logger.info(f"Reading NIFTI file: {nifti_path}")
-        nifti_image = sitk.ReadImage(nifti_path)
-        nifti_array = sitk.GetArrayFromImage(nifti_image)
-
-        # Normalize the NIfTI array to the DICOM range (e.g., 0–4095)
-        logger.info("Normalizing NIfTI array to match DICOM pixel range.")
-        nifti_array = (nifti_array - np.min(nifti_array)) / (np.max(nifti_array) - np.min(nifti_array)) * 4095
-        nifti_array = nifti_array.astype(np.uint16)
-
-        # Adjust orientation to match DICOM coordinate system
-        logger.info("Adjusting NIfTI orientation to match DICOM coordinate system.")
-        nifti_array = np.transpose(nifti_array, (0, 2, 1))  # Transpose axes
-        nifti_array = np.flip(nifti_array, axis=1)          # Flip up-down
-        nifti_array = np.rot90(nifti_array, k=1, axes=(1, 2))  # Rotate counterclockwise
-
-        # Get reference DICOM directory
-        reference_dir = str(Path(reference_dicom.filename).parent)
-        logger.info(f"Using reference DICOM directory: {reference_dir}")
+        nifti = nib.load(nifti_path)
         
-        # Get all DICOM files from reference directory
-        reference_files = sorted([
-            os.path.join(reference_dir, f) 
-            for f in os.listdir(reference_dir) 
-            if f.endswith('.dcm')
-        ])
+        # Reorient NIFTI data to match DICOM orientation
+        nifti_data, n_slices_nifti = reorient_nifti_data(nifti)
         
-        if not reference_files:
-            raise ValueError(f"No DICOM files found in reference directory: {reference_dir}")
-            
-        logger.info(f"Found {len(reference_files)} reference DICOM files")
-        
-        # Create output directory
-        os.makedirs(out_folder, exist_ok=True)
-        
-        # Check dimensions
-        if len(nifti_array) != len(reference_files):
-            logger.warning(
-                f"Number of NIFTI slices ({len(nifti_array)}) "
-                f"doesn't match reference files ({len(reference_files)})"
+        # Verify slice count compatibility
+        if n_slices_nifti != n_slices_dicom:
+            raise ValueError(
+                f"Number of NIFTI slices ({n_slices_nifti}) "
+                f"doesn't match reference series ({n_slices_dicom})"
             )
-            
+        
+        # Get study UID from reference series (keep the same study)
+        study_uid = reference_series[0].StudyInstanceUID
+        mr_image_storage_uid = "1.2.840.10008.5.1.4.1.1.4"  # MR Image Storage
+        
         # Process each slice
-        for idx, ref_file in enumerate(reference_files):
-            if idx >= len(nifti_array):
-                break
-                
-            # Read reference DICOM
-            ref_dcm = pydicom.dcmread(ref_file)
+        for z, ref_dcm in enumerate(reference_series):
+            # Create new DICOM dataset by copying the reference
+            ds = ref_dcm.copy()
             
-            # Create new DICOM dataset
-            ds = pydicom.Dataset()
+            # Set transfer syntax: explicit VR, little endian
+            ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+            ds.is_implicit_VR = False
+            ds.is_little_endian = True
             
-            # Copy metadata from reference
-            for elem in ref_dcm:
-                if elem.tag != pydicom.tag.Tag('PixelData'):
-                    ds.add(elem)
-            
-            # Update necessary DICOM attributes
-            ds.file_meta = ref_dcm.file_meta
-            ds.is_implicit_VR = ref_dcm.is_implicit_VR
-            ds.is_little_endian = ref_dcm.is_little_endian
+            # Update UIDs and metadata
+            ds.StudyInstanceUID = study_uid
+            ds.SeriesInstanceUID = series_uid
+            ds.SOPInstanceUID = generate_uid()
+            ds.SOPClassUID = mr_image_storage_uid
             
             # Update series-specific attributes
-            ds.SeriesInstanceUID = series_uid
             ds.SeriesDescription = 'FLAIR Star'
-            ds.SeriesNumber = 1000
-            ds.SOPInstanceUID = generate_uid()
-            ds.InstanceNumber = idx + 1
+            ds.ProtocolName = 'FLAIR_Star'
+            ds.SequenceName = 'flair-star'
+            ds.ImageType = ['DERIVED', 'SECONDARY']
             
-            # Extract the slice data
-            slice_data = nifti_array[idx]
+            # Keep original instance number for slice ordering
+            ds.InstanceNumber = ref_dcm.InstanceNumber
             
-            # Ensure pixel data is within 12-bit range (0–4095)
-            pixel_data = np.clip(slice_data, 0, 4095).astype(np.uint16)
+            # Set Instance Creation Date/Time to current date/time
+            now = datetime.now()
+            ds.InstanceCreationDate = now.strftime("%Y%m%d")
+            ds.InstanceCreationTime = now.strftime("%H%M%S")
             
-            # Update pixel data attributes
-            ds.PixelData = pixel_data.tobytes()
-            ds.Rows, ds.Columns = pixel_data.shape
+            # Get the corresponding slice data
+            slice_data = nifti_data[:, :, z]
+            
+            # Match dimensions: check if a transpose is needed
+            orig_rows = ds.Rows
+            orig_cols = ds.Columns
+            if (slice_data.shape[0] == orig_cols) and (slice_data.shape[1] == orig_rows):
+                slice_data = slice_data.T
+            elif (slice_data.shape[0] != orig_rows) or (slice_data.shape[1] != orig_cols):
+                logger.warning(f"Slice {z} shape {slice_data.shape} vs DICOM {orig_rows}x{orig_cols}. Applying transpose.")
+                slice_data = slice_data.T
+            
+            # Apply orientation fixes if needed
+            slice_data = np.flip(slice_data, (0, 1))
+            
+            # Scale to DICOM range while preserving relative intensities
+            if np.any(slice_data):  # If not all zeros
+                scaled_data = ((slice_data - np.min(slice_data)) / 
+                             (np.max(slice_data) - np.min(slice_data)) * 4095)
+            else:
+                scaled_data = slice_data
+            scaled_data = scaled_data.astype(np.uint16)
+            
+            # Set pixel-related attributes
+            ds.Rows = scaled_data.shape[0]
+            ds.Columns = scaled_data.shape[1]
+            ds.PixelData = scaled_data.tobytes()
             ds.SamplesPerPixel = 1
             ds.PhotometricInterpretation = "MONOCHROME2"
             ds.BitsAllocated = 16
             ds.BitsStored = 12
             ds.HighBit = 11
             ds.PixelRepresentation = 0
-            ds.RescaleIntercept = 0
-            ds.RescaleSlope = 1
+            ds["PixelData"].VR = "OW"
+            
+            # Set window/level
             ds.WindowCenter = 2047
             ds.WindowWidth = 4095
+            ds.RescaleIntercept = 0
+            ds.RescaleSlope = 1
             
-            # Save new DICOM file
-            output_file = os.path.join(out_folder, f'{series_uid}_{idx+1:04d}.dcm')
+            # Save the DICOM file
+            output_file = os.path.join(out_folder, f'{series_uid}_{z+1:04d}.dcm')
             ds.save_as(output_file, write_like_original=False)
-            logger.debug(f"Saved slice {idx + 1}/{len(reference_files)}: {output_file}")
+            logger.debug(f"Saved slice {z + 1}/{n_slices_dicom}: {output_file}")
         
-        logger.info(f"Successfully converted NIFTI to {len(reference_files)} DICOM files")
+        logger.info(f"Successfully converted NIFTI to {n_slices_dicom} DICOM files")
         return True
         
     except Exception as e:
         logger.error(f"Error converting NIFTI to DICOM: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         return False
+
+if __name__ == "__main__":
+    # Set up logging
+    logging.basicConfig(level=logging.INFO)
+    
+    # Define paths
+    nifti_path = "/home/mri/laminate/forAmr_lesionseg_containerized/TestServiceLaminate/putiTest/Agureevaeyu046YF20220511_ses-01_FLAIR.nii.gz"  # Replace with your NIFTI file path
+    reference_dicom_path = "/home/mri/laminate/forAmr_lesionseg_containerized/TestServiceLaminate/input/Agureeva_EYu/Head_Brain - 1/t2_space_darkfluid_09_iso_tr7000_34/IM-0017-0001.dcm"  # Replace with path to one reference DICOM file
+    output_folder = "/home/mri/laminate/forAmr_lesionseg_containerized/TestServiceLaminate/putiTest"  # Replace with your desired output folder
+    
+    # Generate a new series UID
+    series_uid = generate_uid()
+    
+    # Load reference DICOM
+    reference_dicom = pydicom.dcmread(reference_dicom_path)
+    
+    # Run the conversion
+    success = nifti_to_dicom(nifti_path, reference_dicom, output_folder, series_uid)
+    
+    if success:
+        print("Conversion completed successfully!")
+    else:
+        print("Conversion failed. Check the logs for details.")
