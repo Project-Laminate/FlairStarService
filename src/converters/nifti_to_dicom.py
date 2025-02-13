@@ -184,6 +184,7 @@ def nifti_to_dicom(nifti_path, reference_dicom, out_folder, series_uid):
             ds.HighBit = 11
             ds.PixelRepresentation = 0
             ds["PixelData"].VR = "OW"
+            ds.SeriesNumber = 1000
             
             # Set window/level
             ds.WindowCenter = 2047
@@ -204,26 +205,3 @@ def nifti_to_dicom(nifti_path, reference_dicom, out_folder, series_uid):
         import traceback
         logger.error(traceback.format_exc())
         return False
-
-if __name__ == "__main__":
-    # Set up logging
-    logging.basicConfig(level=logging.INFO)
-    
-    # Define paths
-    nifti_path = "/home/mri/laminate/forAmr_lesionseg_containerized/TestServiceLaminate/putiTest/Agureevaeyu046YF20220511_ses-01_FLAIR.nii.gz"  # Replace with your NIFTI file path
-    reference_dicom_path = "/home/mri/laminate/forAmr_lesionseg_containerized/TestServiceLaminate/input/Agureeva_EYu/Head_Brain - 1/t2_space_darkfluid_09_iso_tr7000_34/IM-0017-0001.dcm"  # Replace with path to one reference DICOM file
-    output_folder = "/home/mri/laminate/forAmr_lesionseg_containerized/TestServiceLaminate/putiTest"  # Replace with your desired output folder
-    
-    # Generate a new series UID
-    series_uid = generate_uid()
-    
-    # Load reference DICOM
-    reference_dicom = pydicom.dcmread(reference_dicom_path)
-    
-    # Run the conversion
-    success = nifti_to_dicom(nifti_path, reference_dicom, output_folder, series_uid)
-    
-    if success:
-        print("Conversion completed successfully!")
-    else:
-        print("Conversion failed. Check the logs for details.")
