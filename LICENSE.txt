@@ -1,0 +1,31 @@
+CUSTOM NON-COMMERCIAL LICENSE AGREEMENT
+
+Effective Date: 19th of January
+
+1. GRANT OF LICENSE  
+   1.1 Subject to the terms and conditions of this License Agreement, Osama Abdullah, New York University Abu Dhabi ("Licensor") hereby grants you ("Licensee") a non-exclusive, non-transferable, revocable license to use the enclosed software ("Software") solely for non-commercial purposes.  
+   1.2 The Software is provided only for evaluation, testing, and internal purposes. This License does not grant you any rights to use the Software for commercial gain in any manner.
+
+2. RESTRICTIONS  
+   2.1 You are expressly prohibited from:  
+       (a) Modifying, adapting, or creating derivative works based on the Software for any commercial or non-commercial purpose unless expressly authorized in writing by the Licensor.  
+       (b) Distributing, sublicensing, selling, renting, leasing, or otherwise transferring or disclosing the Software or any modified version thereof to any third party.  
+       (c) Using the Software, or any part thereof, in any way that is intended for or may result in commercial exploitation.
+
+3. RESERVATION OF RIGHTS  
+   3.1 The Licensor reserves all rights not expressly granted to you under this License Agreement.  
+   3.2 The Licensor reserves the right to, at its sole discretion, alter or amend the terms of this License, including but not limited to permitting commercial use, at any time in the future. Any such changes will be communicated in writing, and continued use of the Software following such notification will be deemed acceptance of the modified terms.
+
+4. GOVERNING LAW  
+   4.1 This License Agreement shall be governed by and construed in accordance with the laws of the United Arab Emirates (UAE).  
+   4.2 Any disputes arising under or in connection with this License Agreement shall be subject to the exclusive jurisdiction of the courts located in the UAE.
+
+5. DISCLAIMER OF WARRANTY  
+   5.1 The Software is provided "AS IS," without any warranty of any kind, whether expressed or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, or non-infringement.
+   5.2 In no event shall the Licensor be liable for any damages (including, without limitation, direct, indirect, incidental, special, or consequential damages) arising out of or in connection with the use or inability to use the Software.
+
+6. TERMINATION  
+   6.1 This License is effective until terminated. The Licensee's rights under this License will terminate automatically without notice from the Licensor if the Licensee fails to comply with any term(s) of this License.  
+   6.2 Upon termination, you must immediately cease all use of the Software and destroy all copies, full or partial, of the Software in your possession or control.
+
+By using the Software, you acknowledge that you have read, understood, and agree to be bound by the terms of this License Agreement.
