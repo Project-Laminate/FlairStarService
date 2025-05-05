@@ -1,3 +1,27 @@
+"""
+FLAIR-STAR Processing Pipeline
+
+This script processes DICOM files to create FLAIR-STAR images by combining
+SWI (Susceptibility Weighted Imaging) and FLAIR (Fluid Attenuated Inversion Recovery)
+MRI sequences.
+
+Usage:
+    python main.py --input-dir INPUT_DIR --output-dir OUTPUT_DIR [OPTIONS]
+
+Options:
+    --input-dir DIR      Input directory containing DICOM files
+    --output-dir DIR     Output directory for processed files
+    --temp-dir DIR       Temporary directory for intermediate files
+    --swi-pattern STR    Pattern to match SWI series in SeriesDescription
+    --flair-pattern STR  Pattern to match FLAIR series in SeriesDescription
+
+You have two options for specifying the series to process:
+1. Use a task.json file in the input directory with detailed pattern rules
+2. Use the --swi-pattern and --flair-pattern command-line options for simple name matching
+
+If both --swi-pattern and --flair-pattern are provided, they take precedence over task.json.
+"""
+
 import argparse
 import logging
 import json
@@ -31,6 +55,8 @@ def setup_argparse():
     parser.add_argument('--input-dir', required=True, help='Input directory containing DICOM files')
     parser.add_argument('--output-dir', required=True, help='Output directory for processed files')
     parser.add_argument('--temp-dir', required=False, help='Temporary directory for intermediate files')
+    parser.add_argument('--swi-pattern', required=False, help='Pattern to match SWI series in SeriesDescription (e.g., "SWI")')
+    parser.add_argument('--flair-pattern', required=False, help='Pattern to match FLAIR series in SeriesDescription (e.g., "FLAIR")')
     return parser.parse_args()
 
 def load_task_json(input_dir):
@@ -83,6 +109,37 @@ def load_task_json(input_dir):
     except Exception as e:
         raise ValueError(f"Error processing task.json: {str(e)}")
 
+def create_settings_from_patterns(swi_pattern, flair_pattern):
+    """Create a settings dictionary from pattern strings provided in command line"""
+    logger = logging.getLogger(__name__)
+    logger.info(f"Creating settings from patterns: SWI='{swi_pattern}', FLAIR='{flair_pattern}'")
+    
+    # Create minimal settings structure with pattern rules
+    settings = {
+        "processing": {
+            "swi_pattern": {
+                "rules": [
+                    {
+                        "tag": "SeriesDescription",
+                        "operation": "contains",
+                        "value": swi_pattern
+                    }
+                ]
+            },
+            "flair_pattern": {
+                "rules": [
+                    {
+                        "tag": "SeriesDescription",
+                        "operation": "contains",
+                        "value": flair_pattern
+                    }
+                ]
+            }
+        }
+    }
+    
+    return settings
+
 def main():
     setup_logging()
     logger = logging.getLogger(__name__)
@@ -124,10 +181,27 @@ def main():
             raise ValueError(f"Cannot create temporary directory: {str(e)}")
         
         try:
-            # Step 1: Load and validate configuration
-            logger.info("Step 1: Loading task.json configuration...")
-            settings = load_task_json(args.input_dir)
-            logger.info("Configuration loaded and validated successfully")
+            # Step 1: Load or create configuration
+            if args.swi_pattern and args.flair_pattern:
+                logger.info("Using command-line patterns for series matching...")
+                settings = create_settings_from_patterns(args.swi_pattern, args.flair_pattern)
+                logger.info("Pattern settings created successfully")
+            elif args.swi_pattern or args.flair_pattern:
+                # Only one pattern was provided
+                if args.swi_pattern:
+                    missing = "FLAIR"
+                    provided = "SWI"
+                else:
+                    missing = "SWI"
+                    provided = "FLAIR"
+                logger.warning(f"Only {provided} pattern was provided. Both SWI and FLAIR patterns are required.")
+                logger.warning(f"Falling back to task.json configuration.")
+                settings = load_task_json(args.input_dir)
+                logger.info("Configuration loaded and validated successfully")
+            else:
+                logger.info("Loading task.json configuration...")
+                settings = load_task_json(args.input_dir)
+                logger.info("Configuration loaded and validated successfully")
             
             # Step 2: Find matching DICOM series
             logger.info("Step 2: Scanning for matching DICOM series...")
