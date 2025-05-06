@@ -72,8 +72,14 @@ class SeriesProcessor:
             if not success:
                 return False
                 
-            if not self._copy_input_dicoms(swi_series, flair_series):
-                return False
+            # Check if we should copy all input DICOM files
+            copy_all = self.settings.get('copy_all', False)
+            if copy_all:
+                self.logger.info("COPY_ALL flag is set, copying all input DICOM files...")
+                if not self._copy_input_dicoms(swi_series, flair_series):
+                    return False
+            else:
+                self.logger.info("COPY_ALL flag is not set, skipping copy of input DICOM files")
 
             return True
 

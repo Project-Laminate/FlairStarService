@@ -26,6 +26,7 @@ import argparse
 import logging
 import json
 import shutil
+import os
 from pathlib import Path
 from processors.series_processor import SeriesProcessor
 from utils.dicom_utils import find_dicom_series
@@ -52,18 +53,43 @@ def setup_logging():
 
 def setup_argparse():
     parser = argparse.ArgumentParser(description='DICOM processing pipeline')
-    parser.add_argument('--input-dir', required=True, help='Input directory containing DICOM files')
-    parser.add_argument('--output-dir', required=True, help='Output directory for processed files')
+    parser.add_argument('--input-dir', required=False, help='Input directory containing DICOM files')
+    parser.add_argument('--output-dir', required=False, help='Output directory for processed files')
     parser.add_argument('--temp-dir', required=False, help='Temporary directory for intermediate files')
     parser.add_argument('--swi-pattern', required=False, help='Pattern to match SWI series in SeriesDescription (e.g., "SWI")')
     parser.add_argument('--flair-pattern', required=False, help='Pattern to match FLAIR series in SeriesDescription (e.g., "FLAIR")')
-    return parser.parse_args()
+    parser.add_argument('--swi-uid', required=False, help='SeriesInstanceUID for SWI series')
+    parser.add_argument('--flair-uid', required=False, help='SeriesInstanceUID for FLAIR series')
+    args = parser.parse_args()
+    
+    # Check environment variables if command line arguments aren't provided
+    if not args.input_dir:
+        args.input_dir = os.environ.get('DATASET_PATH', '/input')
+        logging.getLogger(__name__).info(f"Using input directory from environment: {args.input_dir}")
+    
+    if not args.output_dir:
+        args.output_dir = os.environ.get('RESULTS_PATH', '/output')
+        logging.getLogger(__name__).info(f"Using output directory from environment: {args.output_dir}")
+    
+    return args
 
 def load_task_json(input_dir):
     """Load and validate task.json if it exists"""
     task_file = Path(input_dir) / 'task.json'
+    logger = logging.getLogger(__name__)
+    
     if not task_file.exists():
-        raise ValueError("task.json not found in input directory")
+        logger.warning("task.json not found in input directory")
+        
+        # Check environment variables for patterns
+        swi_pattern = os.environ.get('SWI_PATTERN')
+        flair_pattern = os.environ.get('FLAIR_PATTERN')
+        
+        if swi_pattern and flair_pattern:
+            logger.info(f"Using patterns from environment variables: SWI='{swi_pattern}', FLAIR='{flair_pattern}'")
+            return create_settings_from_patterns(swi_pattern, flair_pattern)
+        else:
+            raise ValueError("task.json not found and environment variables SWI_PATTERN and/or FLAIR_PATTERN are not set")
         
     try:
         with open(task_file) as f:
@@ -102,6 +128,11 @@ def load_task_json(input_dir):
                         "Each rule must have 'tag', 'operation', and 'value'"
                     )
         
+        # Add COPY_ALL flag to settings
+        copy_all = os.environ.get('COPY_ALL', '').lower() in ('true', 'yes', '1')
+        settings['copy_all'] = copy_all
+        logger.info(f"COPY_ALL flag is set to: {copy_all}")
+        
         return settings
         
     except json.JSONDecodeError as e:
@@ -113,6 +144,9 @@ def create_settings_from_patterns(swi_pattern, flair_pattern):
     """Create a settings dictionary from pattern strings provided in command line"""
     logger = logging.getLogger(__name__)
     logger.info(f"Creating settings from patterns: SWI='{swi_pattern}', FLAIR='{flair_pattern}'")
+    
+    # Check for COPY_ALL environment variable
+    copy_all = os.environ.get('COPY_ALL', '').lower() in ('true', 'yes', '1')
     
     # Create minimal settings structure with pattern rules
     settings = {
@@ -135,7 +169,43 @@ def create_settings_from_patterns(swi_pattern, flair_pattern):
                     }
                 ]
             }
-        }
+        },
+        "copy_all": copy_all
+    }
+    
+    return settings
+
+def create_settings_from_uids(swi_uid, flair_uid):
+    """Create a settings dictionary from SeriesInstanceUIDs provided in command line"""
+    logger = logging.getLogger(__name__)
+    logger.info(f"Creating settings from UIDs: SWI='{swi_uid}', FLAIR='{flair_uid}'")
+    
+    # Check for COPY_ALL environment variable
+    copy_all = os.environ.get('COPY_ALL', '').lower() in ('true', 'yes', '1')
+    
+    # Create minimal settings structure with UIDs
+    settings = {
+        "processing": {
+            "swi_pattern": {
+                "rules": [
+                    {
+                        "tag": "SeriesInstanceUID",
+                        "operation": "equals",
+                        "value": swi_uid
+                    }
+                ]
+            },
+            "flair_pattern": {
+                "rules": [
+                    {
+                        "tag": "SeriesInstanceUID",
+                        "operation": "equals",
+                        "value": flair_uid
+                    }
+                ]
+            }
+        },
+        "copy_all": copy_all
     }
     
     return settings
@@ -182,26 +252,103 @@ def main():
         
         try:
             # Step 1: Load or create configuration
-            if args.swi_pattern and args.flair_pattern:
+            
+            # Check if SeriesInstanceUIDs are provided
+            if args.swi_uid and args.flair_uid:
+                logger.info("Using SeriesInstanceUIDs for series matching...")
+                settings = create_settings_from_uids(args.swi_uid, args.flair_uid)
+                logger.info("UID settings created successfully")
+            # Check if pattern matching is provided
+            elif args.swi_pattern and args.flair_pattern:
                 logger.info("Using command-line patterns for series matching...")
                 settings = create_settings_from_patterns(args.swi_pattern, args.flair_pattern)
                 logger.info("Pattern settings created successfully")
-            elif args.swi_pattern or args.flair_pattern:
-                # Only one pattern was provided
-                if args.swi_pattern:
-                    missing = "FLAIR"
-                    provided = "SWI"
+            # Check if one of each is provided (pattern and UID)
+            elif (args.swi_pattern and args.flair_uid) or (args.swi_uid and args.flair_pattern):
+                logger.warning("Mixed pattern and UID specification is not supported.")
+                logger.warning("Please use either patterns or UIDs for both series.")
+                
+                # Check if env vars can complete the specification
+                env_swi_uid = os.environ.get('SWI_UID')
+                env_flair_uid = os.environ.get('FLAIR_UID')
+                env_swi_pattern = os.environ.get('SWI_PATTERN')
+                env_flair_pattern = os.environ.get('FLAIR_PATTERN')
+                
+                # Try to complete UIDs
+                if (args.swi_uid or env_swi_uid) and (args.flair_uid or env_flair_uid):
+                    swi = args.swi_uid or env_swi_uid
+                    flair = args.flair_uid or env_flair_uid
+                    logger.info(f"Using UIDs from combined sources: SWI='{swi}', FLAIR='{flair}'")
+                    settings = create_settings_from_uids(swi, flair)
+                # Try to complete patterns
+                elif (args.swi_pattern or env_swi_pattern) and (args.flair_pattern or env_flair_pattern):
+                    swi = args.swi_pattern or env_swi_pattern
+                    flair = args.flair_pattern or env_flair_pattern
+                    logger.info(f"Using patterns from combined sources: SWI='{swi}', FLAIR='{flair}'")
+                    settings = create_settings_from_patterns(swi, flair)
                 else:
-                    missing = "SWI"
-                    provided = "FLAIR"
-                logger.warning(f"Only {provided} pattern was provided. Both SWI and FLAIR patterns are required.")
-                logger.warning(f"Falling back to task.json configuration.")
-                settings = load_task_json(args.input_dir)
-                logger.info("Configuration loaded and validated successfully")
+                    logger.warning("Falling back to task.json configuration.")
+                    settings = load_task_json(args.input_dir)
+                    logger.info("Configuration loaded and validated successfully")
+            # Check if only one pattern/UID is provided
+            elif args.swi_pattern or args.flair_pattern or args.swi_uid or args.flair_uid:
+                # Determine what's missing and what's provided
+                if args.swi_pattern:
+                    missing_type = "FLAIR pattern"
+                    provided_type = "SWI pattern"
+                elif args.flair_pattern:
+                    missing_type = "SWI pattern"
+                    provided_type = "FLAIR pattern"
+                elif args.swi_uid:
+                    missing_type = "FLAIR UID"
+                    provided_type = "SWI UID"
+                else:  # args.flair_uid
+                    missing_type = "SWI UID"
+                    provided_type = "FLAIR UID"
+                
+                logger.warning(f"Only {provided_type} was provided. Both are required.")
+                
+                # Check environment variables
+                env_swi_uid = os.environ.get('SWI_UID')
+                env_flair_uid = os.environ.get('FLAIR_UID')
+                env_swi_pattern = os.environ.get('SWI_PATTERN')
+                env_flair_pattern = os.environ.get('FLAIR_PATTERN')
+                
+                # Try to complete UIDs
+                if (args.swi_uid or env_swi_uid) and (args.flair_uid or env_flair_uid):
+                    swi = args.swi_uid or env_swi_uid
+                    flair = args.flair_uid or env_flair_uid
+                    logger.info(f"Using UIDs from combined sources: SWI='{swi}', FLAIR='{flair}'")
+                    settings = create_settings_from_uids(swi, flair)
+                # Try to complete patterns
+                elif (args.swi_pattern or env_swi_pattern) and (args.flair_pattern or env_flair_pattern):
+                    swi = args.swi_pattern or env_swi_pattern
+                    flair = args.flair_pattern or env_flair_pattern
+                    logger.info(f"Using patterns from combined sources: SWI='{swi}', FLAIR='{flair}'")
+                    settings = create_settings_from_patterns(swi, flair)
+                else:
+                    logger.warning(f"Falling back to task.json configuration.")
+                    settings = load_task_json(args.input_dir)
+                    logger.info("Configuration loaded and validated successfully")
             else:
-                logger.info("Loading task.json configuration...")
-                settings = load_task_json(args.input_dir)
-                logger.info("Configuration loaded and validated successfully")
+                # Check environment variables first
+                env_swi_uid = os.environ.get('SWI_UID')
+                env_flair_uid = os.environ.get('FLAIR_UID')
+                env_swi_pattern = os.environ.get('SWI_PATTERN')
+                env_flair_pattern = os.environ.get('FLAIR_PATTERN')
+                
+                if env_swi_uid and env_flair_uid:
+                    logger.info(f"Using UIDs from environment variables: SWI='{env_swi_uid}', FLAIR='{env_flair_uid}'")
+                    settings = create_settings_from_uids(env_swi_uid, env_flair_uid)
+                    logger.info("UID settings created successfully")
+                elif env_swi_pattern and env_flair_pattern:
+                    logger.info(f"Using patterns from environment variables: SWI='{env_swi_pattern}', FLAIR='{env_flair_pattern}'")
+                    settings = create_settings_from_patterns(env_swi_pattern, env_flair_pattern)
+                    logger.info("Pattern settings created successfully")
+                else:
+                    logger.info("Loading task.json configuration...")
+                    settings = load_task_json(args.input_dir)
+                    logger.info("Configuration loaded and validated successfully")
             
             # Step 2: Find matching DICOM series
             logger.info("Step 2: Scanning for matching DICOM series...")

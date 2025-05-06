@@ -3,6 +3,11 @@
 DOCKER_IMAGE="amrshadid/flair-star-processor:latest"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 BUILD_LOCALLY=false
+SWI_PATTERN=""
+FLAIR_PATTERN=""
+SWI_UID=""
+FLAIR_UID=""
+COPY_ALL="false"
 
 detect_os() {
     case "$(uname -s)" in
@@ -39,12 +44,17 @@ convert_path() {
 }
 
 usage() {
-    echo "Usage: $0 -i <input_dir> -o <output_dir> [-b]"
+    echo "Usage: $0 -i <input_dir> -o <output_dir> [-b] [--swi <pattern>] [--flair <pattern>] [--swi-uid <uid>] [--flair-uid <uid>] [--copy-all]"
     echo
     echo "Options:"
     echo "  -i, --input     Input directory containing DICOM files"
     echo "  -o, --output    Output directory for processed files"
     echo "  -b, --build     Build Docker image locally instead of pulling from Docker Hub"
+    echo "  --swi           Pattern to match SWI series in SeriesDescription"
+    echo "  --flair         Pattern to match FLAIR series in SeriesDescription"
+    echo "  --swi-uid       SeriesInstanceUID for SWI series"
+    echo "  --flair-uid     SeriesInstanceUID for FLAIR series"
+    echo "  --copy-all      Copy all input DICOM files to output (default: false)"
     echo "  -h, --help      Show this help message"
     exit 1
 }
@@ -61,6 +71,26 @@ while [[ $# -gt 0 ]]; do
             ;;
         -b|--build)
             BUILD_LOCALLY=true
+            shift
+            ;;
+        --swi)
+            SWI_PATTERN="$2"
+            shift 2
+            ;;
+        --flair)
+            FLAIR_PATTERN="$2"
+            shift 2
+            ;;
+        --swi-uid)
+            SWI_UID="$2"
+            shift 2
+            ;;
+        --flair-uid)
+            FLAIR_UID="$2"
+            shift 2
+            ;;
+        --copy-all)
+            COPY_ALL="true"
             shift
             ;;
         -h|--help)
@@ -146,7 +176,32 @@ fi
 ENV_VARS=(
     "-e MERCURE_IN_DIR=/data/input"
     "-e MERCURE_OUT_DIR=/data/output"
+    "-e DATASET_PATH=/data/input"
+    "-e RESULTS_PATH=/data/output"
+    "-e COPY_ALL=\"$COPY_ALL\""
 )
+
+# Add UID variables if they were provided
+if [ ! -z "$SWI_UID" ]; then
+    ENV_VARS+=("-e SWI_UID=\"$SWI_UID\"")
+    echo "Using SWI UID: $SWI_UID"
+fi
+
+if [ ! -z "$FLAIR_UID" ]; then
+    ENV_VARS+=("-e FLAIR_UID=\"$FLAIR_UID\"")
+    echo "Using FLAIR UID: $FLAIR_UID"
+fi
+
+# Add pattern variables if they were provided
+if [ ! -z "$SWI_PATTERN" ]; then
+    ENV_VARS+=("-e SWI_PATTERN=\"$SWI_PATTERN\"")
+    echo "Using SWI pattern: $SWI_PATTERN"
+fi
+
+if [ ! -z "$FLAIR_PATTERN" ]; then
+    ENV_VARS+=("-e FLAIR_PATTERN=\"$FLAIR_PATTERN\"")
+    echo "Using FLAIR pattern: $FLAIR_PATTERN"
+fi
 
 CMD="/app/src/main.py"
 
