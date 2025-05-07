@@ -8,8 +8,8 @@ mkdir -p "$TEMP_DIR"
 echo "-- Starting FLAIR STAR module..."
 
 # Export environment variables
-export DATASET_PATH="${MERCURE_IN_DIR:-/data/input}"
-export RESULTS_PATH="${MERCURE_OUT_DIR:-/data/output}"
+export DATASET_PATH="${MERCURE_IN_DIR:-/input}"
+export RESULTS_PATH="${MERCURE_OUT_DIR:-/output}"
 export SWI_PATTERN="${SWI_PATTERN:-}"
 export FLAIR_PATTERN="${FLAIR_PATTERN:-}"
 export SWI_UID="${SWI_UID:-}"

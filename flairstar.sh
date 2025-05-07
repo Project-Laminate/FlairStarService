@@ -174,10 +174,10 @@ if [ "$OS_TYPE" = "linux" ]; then
 fi
 
 ENV_VARS=(
-    "-e MERCURE_IN_DIR=/data/input"
-    "-e MERCURE_OUT_DIR=/data/output"
-    "-e DATASET_PATH=/data/input"
-    "-e RESULTS_PATH=/data/output"
+    "-e MERCURE_IN_DIR=/input"
+    "-e MERCURE_OUT_DIR=/output"
+    "-e DATASET_PATH=/input"
+    "-e RESULTS_PATH=/output"
     "-e COPY_ALL=\"$COPY_ALL\""
 )
 
@@ -206,8 +206,8 @@ fi
 CMD="/app/src/main.py"
 
 $DOCKER_CMD \
-    -v "$INPUT_DIR:/data/input:ro" \
-    -v "$OUTPUT_DIR:/data/output" \
+    -v "$INPUT_DIR:/input:ro" \
+    -v "$OUTPUT_DIR:/output" \
     ${ENV_VARS[@]} \
     "$DOCKER_IMAGE" \
     ${CMD:-}
