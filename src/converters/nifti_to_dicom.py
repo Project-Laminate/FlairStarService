@@ -109,6 +109,11 @@ def nifti_to_dicom(nifti_path, reference_dicom, out_folder, series_uid):
         # Reorient NIFTI data to match DICOM orientation
         nifti_data, n_slices_nifti = reorient_nifti_data(nifti)
         
+        # Compute global min/max for the whole volume
+        global_min = np.min(nifti_data)
+        global_max = np.max(nifti_data)
+        logger.info(f"Global min: {global_min}, max: {global_max} for NIfTI volume")
+        
         # Verify slice count compatibility
         if n_slices_nifti != n_slices_dicom:
             raise ValueError(
@@ -165,10 +170,9 @@ def nifti_to_dicom(nifti_path, reference_dicom, out_folder, series_uid):
             # Apply orientation fixes if needed
             slice_data = np.flip(slice_data, (0, 1))
             
-            # Scale to DICOM range while preserving relative intensities
-            if np.any(slice_data):  # If not all zeros
-                scaled_data = ((slice_data - np.min(slice_data)) / 
-                             (np.max(slice_data) - np.min(slice_data)) * 4095)
+            # Scale to DICOM range using global min/max
+            if global_max > global_min:
+                scaled_data = ((slice_data - global_min) / (global_max - global_min) * 4095)
             else:
                 scaled_data = slice_data
             scaled_data = scaled_data.astype(np.uint16)
