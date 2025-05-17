@@ -30,6 +30,22 @@ def get_series_timestamp(dcm):
         logger.debug(f"Error getting timestamp: {str(e)}")
         return datetime.min
 
+def extract_series_uid_from_path(filepath):
+    """Try to extract the SeriesInstanceUID from the file path"""
+    # Convert to string if it's a Path object
+    if isinstance(filepath, Path):
+        filepath = str(filepath)
+    
+    # Split the path into components
+    parts = filepath.split(os.sep)
+    
+    # Look for a component that looks like a UID (has many dots and numbers)
+    for part in parts:
+        if part.count('.') > 5 and all(c.isdigit() or c == '.' for c in part):
+            return part
+    
+    return None
+
 def find_dicom_series(directory, settings):
     """
     Find and organize DICOM files into series based on pattern rules
@@ -62,9 +78,6 @@ def find_dicom_series(directory, settings):
     rule_checker = RuleChecker()
     patterns = settings.get('processing', {})
     
-    series_files = defaultdict(list)
-    series_info = {}
-    
     # Log all subdirectories for debugging
     all_dirs = []
     for root, dirs, _ in os.walk(directory):
@@ -73,6 +86,9 @@ def find_dicom_series(directory, settings):
     logger.info(f"Found {len(all_dirs)} subdirectories to search")
     
     dcm_count = 0
+    series_files = defaultdict(list)
+    series_info = {}
+    
     # First pass: collect all series
     for root, _, files in os.walk(directory):
         root_path = Path(root)
@@ -84,11 +100,20 @@ def find_dicom_series(directory, settings):
             filepath = root_path / filename
             try:
                 dcm = pydicom.dcmread(str(filepath), stop_before_pixels=True)
-                if not hasattr(dcm, 'SeriesInstanceUID'):
-                    logger.debug(f"Skipping file {filepath}: No SeriesInstanceUID found")
-                    continue
-                    
-                series_uid = dcm.SeriesInstanceUID
+                
+                # Try to get SeriesInstanceUID from DICOM metadata
+                series_uid = None
+                if hasattr(dcm, 'SeriesInstanceUID'):
+                    series_uid = dcm.SeriesInstanceUID
+                else:
+                    # If not in metadata, try to extract from parent directory name
+                    series_uid = extract_series_uid_from_path(filepath)
+                    if series_uid:
+                        logger.debug(f"Extracted SeriesInstanceUID from path: {series_uid}")
+                    else:
+                        logger.debug(f"Skipping file {filepath}: No SeriesInstanceUID found in file or path")
+                        continue
+                
                 rel_path = filepath.relative_to(directory)
                 series_files[series_uid].append(str(rel_path))
                 
@@ -119,6 +144,24 @@ def find_dicom_series(directory, settings):
             if pattern_name not in ['swi_pattern', 'flair_pattern']:
                 continue
                 
+            # For SeriesInstanceUID matching, handle it directly
+            if (pattern_rules.get('rules') and 
+                len(pattern_rules['rules']) == 1 and 
+                pattern_rules['rules'][0].get('tag') == 'SeriesInstanceUID' and
+                pattern_rules['rules'][0].get('operation') == 'equals'):
+                
+                target_uid = pattern_rules['rules'][0].get('value')
+                if series_uid == target_uid:
+                    logger.info(f"Series {series_uid} matches pattern {pattern_name} by direct UID comparison")
+                    pattern_series[pattern_name].append({
+                        'series_uid': series_uid,
+                        'description': info['description'],
+                        'timestamp': info['timestamp'],
+                        'files': series_files[series_uid]
+                    })
+                continue
+                
+            # Otherwise use the rule checker
             success, error_msg = rule_checker.check_pattern_rules(dcm, pattern_rules)
             if success:
                 logger.info(f"Series {series_uid} matches pattern {pattern_name}")
