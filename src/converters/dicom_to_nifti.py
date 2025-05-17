@@ -7,7 +7,7 @@ from utils.rule_checker import RuleChecker
 def process_series(series_files, in_folder, temp_folder, series_uid, settings):
     """Process a single DICOM series through the conversion pipeline"""
 
-    first_dicom = pydicom.dcmread(str(Path(in_folder) / series_files[0]))
+    first_dicom = pydicom.dcmread(str(Path(in_folder) / series_files[0]), force=True)
     series_description = getattr(first_dicom, 'SeriesDescription', '')
     
     processing_settings = settings.get("processing", {})

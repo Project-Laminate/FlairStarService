@@ -8,7 +8,7 @@ def collect_series(in_folder, dicom_files, settings):
     for file in dicom_files:
         try:
             dicom_path = Path(in_folder) / file
-            dicom = pydicom.dcmread(str(dicom_path))
+            dicom = pydicom.dcmread(str(dicom_path), force=True)
             
             series_desc = getattr(dicom, 'SeriesDescription', 'Unknown')
             series_uid = getattr(dicom, 'SeriesInstanceUID', 'Unknown')

@@ -182,7 +182,8 @@ class SeriesProcessor:
         """Convert NIFTI result back to DICOM"""
         try:
             reference_dicom = pydicom.dcmread(
-                str(self.in_folder / series['files'][0])
+                str(self.in_folder / series['files'][0]),
+                force=True
             )
             result_series_uid = generate_uid()
             nifti_to_dicom(

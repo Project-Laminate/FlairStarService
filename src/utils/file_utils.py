@@ -10,7 +10,7 @@ def find_dicom_files(directory):
         for file in files:
             try:
                 file_path = Path(root) / file
-                pydicom.dcmread(str(file_path))
+                pydicom.dcmread(str(file_path), force=True)
                 rel_path = os.path.relpath(str(file_path), directory)
                 dicom_files.append(rel_path)
             except:

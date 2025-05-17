@@ -26,7 +26,7 @@ def load_reference_series(reference_dicom):
     series_files = []
     for file in reference_dir.glob('*.dcm'):
         try:
-            ds = pydicom.dcmread(str(file), stop_before_pixels=True)
+            ds = pydicom.dcmread(str(file), stop_before_pixels=True, force=True)
             if hasattr(ds, 'SeriesInstanceUID') and ds.SeriesInstanceUID == series_uid:
                 series_files.append((ds, file))
         except Exception as e:
