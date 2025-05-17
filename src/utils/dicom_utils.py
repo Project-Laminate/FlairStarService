@@ -57,6 +57,7 @@ def find_dicom_series(directory, settings):
     directory = Path(directory)
     
     logger.info(f"Scanning directory {directory} for DICOM files")
+    logger.info(f"Looking for patterns in settings: {settings.get('processing', {}).keys()}")
     
     rule_checker = RuleChecker()
     patterns = settings.get('processing', {})
@@ -64,28 +65,51 @@ def find_dicom_series(directory, settings):
     series_files = defaultdict(list)
     series_info = {}
     
+    # Log all subdirectories for debugging
+    all_dirs = []
+    for root, dirs, _ in os.walk(directory):
+        for dir_name in dirs:
+            all_dirs.append(os.path.join(root, dir_name))
+    logger.info(f"Found {len(all_dirs)} subdirectories to search")
+    
+    dcm_count = 0
     # First pass: collect all series
     for root, _, files in os.walk(directory):
+        root_path = Path(root)
         for filename in files:
-            if not filename.endswith('.dcm'):
+            if not filename.lower().endswith(('.dcm', '.ima', '.dicom')):
                 continue
                 
-            filepath = Path(root) / filename
+            dcm_count += 1
+            filepath = root_path / filename
             try:
                 dcm = pydicom.dcmread(str(filepath), stop_before_pixels=True)
+                if not hasattr(dcm, 'SeriesInstanceUID'):
+                    logger.debug(f"Skipping file {filepath}: No SeriesInstanceUID found")
+                    continue
+                    
                 series_uid = dcm.SeriesInstanceUID
                 rel_path = filepath.relative_to(directory)
                 series_files[series_uid].append(str(rel_path))
                 
                 if series_uid not in series_info:
+                    series_desc = getattr(dcm, 'SeriesDescription', 'Unknown')
+                    logger.debug(f"Found series: {series_uid} - {series_desc}")
                     series_info[series_uid] = {
-                        'description': getattr(dcm, 'SeriesDescription', 'Unknown'),
+                        'description': series_desc,
                         'first_file': dcm,
                         'timestamp': get_series_timestamp(dcm)
                     }
             except Exception as e:
                 logger.debug(f"Skipping file {filepath}: {str(e)}")
                 continue
+    
+    logger.info(f"Scanned {dcm_count} DICOM files, found {len(series_info)} unique series")
+    
+    # Log all found series for debugging
+    logger.info("Found series:")
+    for uid, info in series_info.items():
+        logger.info(f"  - {uid}: {info['description']} ({len(series_files[uid])} files)")
     
     # Second pass: match patterns and handle multiple matches
     for series_uid, info in series_info.items():
@@ -97,12 +121,16 @@ def find_dicom_series(directory, settings):
                 
             success, error_msg = rule_checker.check_pattern_rules(dcm, pattern_rules)
             if success:
+                logger.info(f"Series {series_uid} matches pattern {pattern_name}")
                 pattern_series[pattern_name].append({
                     'series_uid': series_uid,
                     'description': info['description'],
                     'timestamp': info['timestamp'],
                     'files': series_files[series_uid]
                 })
+            else:
+                # Log reasons for not matching
+                logger.debug(f"Series {series_uid} does not match {pattern_name}: {error_msg}")
     
     # Handle multiple matches by selecting the latest series
     for pattern_name, matched_series in pattern_series.items():
