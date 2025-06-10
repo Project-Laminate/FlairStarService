@@ -1,0 +1,59 @@
+{
+    "process": {
+        "settings": {
+            "processing": {
+                "swi_pattern": {
+                    "rules": [
+                        {
+                            "tag": "SeriesDescription",
+                            "operation": "equals",
+                            "value": "SWI_Images",
+                            "required": true
+                        },
+                        {
+                            "tag": "MRAcquisitionType",
+                            "operation": "contains",
+                            "value": "3D",
+                            "required": true
+                        },
+                        {
+                            "tag": "SequenceName",
+                            "operation": "contains",
+                            "value": "swi3d1r",
+                            "required": true
+                        }
+                    ]
+                },
+                "flair_pattern": {
+                    "rules": [
+                        {
+                            "tag": "ImageType",
+                            "operation": "contains",
+                            "value": "ORIGINAL",
+                            "required": true
+                        },
+                        {
+                            "tag": "MRAcquisitionType",
+                            "operation": "contains",
+                            "value": "3D",
+                            "required": true
+                        },
+                        {
+                            "tag": "SequenceName",
+                            "operation": "contains",
+                            "value": "spcir",
+                            "required": true
+                        }
+                    ]
+                }
+            },
+            "copy_all": true,
+            "dicom_send": {
+                "host": "10.225.46.207",
+                "port": 11112,
+                "aet": "Soumens-MacBook-",
+                "calling_aet": "FLAIR_STAR_PIPELINE"
+            }
+        }
+    }
+} 

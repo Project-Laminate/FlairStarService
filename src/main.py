@@ -74,33 +74,54 @@ def setup_argparse():
     return args
 
 def load_task_json(input_dir):
-    """Load and validate task.json if it exists"""
-    task_file = Path(input_dir) / 'task.json'
+    """Load and validate task.json from file or environment variable"""
     logger = logging.getLogger(__name__)
+    task_data = None
     
-    if not task_file.exists():
-        logger.warning("task.json not found in input directory")
-        
-        # Check environment variables for patterns
-        swi_pattern = os.environ.get('SWI_PATTERN')
-        flair_pattern = os.environ.get('FLAIR_PATTERN')
-        
-        if swi_pattern and flair_pattern:
-            logger.info(f"Using patterns from environment variables: SWI='{swi_pattern}', FLAIR='{flair_pattern}'")
-            return create_settings_from_patterns(swi_pattern, flair_pattern)
-        else:
-            raise ValueError("task.json not found and environment variables SWI_PATTERN and/or FLAIR_PATTERN are not set")
-        
-    try:
-        with open(task_file) as f:
-            task_data = json.load(f)
+    # First, try to load from TASK_JSON environment variable
+    env_task_json = os.environ.get('TASK_JSON')
+    if env_task_json:
+        logger.info("Loading task configuration from TASK_JSON environment variable")
+        try:
+            task_data = json.loads(env_task_json)
+            logger.info("Successfully parsed JSON from environment variable")
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON format in TASK_JSON environment variable: {str(e)}")
+            raise ValueError(f"Invalid JSON format in TASK_JSON environment variable: {str(e)}")
+    
+    # If not found in env, try loading from file
+    if not task_data:
+        task_file = Path(input_dir) / 'task.json'
+        if not task_file.exists():
+            logger.warning("task.json not found in input directory and TASK_JSON env var not set")
             
+            # Check environment variables for patterns
+            swi_pattern = os.environ.get('SWI_PATTERN')
+            flair_pattern = os.environ.get('FLAIR_PATTERN')
+            
+            if swi_pattern and flair_pattern:
+                logger.info(f"Using patterns from environment variables: SWI='{swi_pattern}', FLAIR='{flair_pattern}'")
+                return create_settings_from_patterns(swi_pattern, flair_pattern)
+            else:
+                raise ValueError("task.json not found, TASK_JSON env var not set, and environment variables SWI_PATTERN and/or FLAIR_PATTERN are not set")
+            
+        try:
+            logger.info("Loading task configuration from task.json file")
+            with open(task_file) as f:
+                task_data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON format in task.json: {str(e)}")
+        except Exception as e:
+            raise ValueError(f"Error reading task.json: {str(e)}")
+    
+    # Now validate the loaded task_data (whether from env or file)
+    try:
         # Check if required fields exist
         if not ('process' in task_data and 
                 'settings' in task_data['process'] and 
                 'processing' in task_data['process']['settings']):
             raise ValueError(
-                "Invalid task.json structure. Required fields missing: "
+                "Invalid task configuration structure. Required fields missing: "
                 "process.settings.processing"
             )
             
@@ -110,7 +131,7 @@ def load_task_json(input_dir):
         processing = settings['processing']
         if not ('swi_pattern' in processing and 'flair_pattern' in processing):
             raise ValueError(
-                "Missing required patterns in task.json. Both 'swi_pattern' "
+                "Missing required patterns in task configuration. Both 'swi_pattern' "
                 "and 'flair_pattern' must be defined."
             )
         
@@ -128,17 +149,24 @@ def load_task_json(input_dir):
                         "Each rule must have 'tag', 'operation', and 'value'"
                     )
         
-        # Add COPY_ALL flag to settings
-        copy_all = os.environ.get('COPY_ALL', '').lower() in ('true', 'yes', '1')
-        settings['copy_all'] = copy_all
-        logger.info(f"COPY_ALL flag is set to: {copy_all}")
+        # Add COPY_ALL flag to settings - this can override the JSON setting
+        copy_all_env = os.environ.get('COPY_ALL', '').lower()
+        if copy_all_env in ('true', 'yes', '1'):
+            settings['copy_all'] = True
+            logger.info("COPY_ALL flag set to True from environment variable")
+        elif copy_all_env in ('false', 'no', '0'):
+            settings['copy_all'] = False
+            logger.info("COPY_ALL flag set to False from environment variable")
+        else:
+            # Use value from JSON if present, otherwise default to False
+            json_copy_all = settings.get('copy_all', False)
+            settings['copy_all'] = json_copy_all
+            logger.info(f"COPY_ALL flag set to {json_copy_all} from configuration (no env override)")
         
         return settings
         
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON format in task.json: {str(e)}")
     except Exception as e:
-        raise ValueError(f"Error processing task.json: {str(e)}")
+        raise ValueError(f"Error processing task configuration: {str(e)}")
 
 def create_settings_from_patterns(swi_pattern, flair_pattern):
     """Create a settings dictionary from pattern strings provided in command line"""
