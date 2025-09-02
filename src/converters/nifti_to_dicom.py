@@ -12,17 +12,26 @@ logger = logging.getLogger(__name__)
 def load_reference_series(reference_dicom):
     """
     Load and sort the entire reference DICOM series.
+    Handles both traditional multi-slice series and enhanced multiframe DICOM files.
     
     Args:
         reference_dicom (pydicom.dataset.FileDataset): A reference DICOM from the series
         
     Returns:
-        list: sorted list of DICOM datasets
+        tuple: (list of DICOM datasets, number of slices/frames, is_multiframe)
     """
     reference_dir = Path(reference_dicom.filename).parent
     series_uid = reference_dicom.SeriesInstanceUID
     
-    # Find all DICOMs from the same series
+    # Check if this is an enhanced multiframe DICOM
+    is_multiframe = hasattr(reference_dicom, 'NumberOfFrames') and reference_dicom.NumberOfFrames > 1
+    
+    if is_multiframe:
+        logger.info(f"Detected enhanced multiframe DICOM with {reference_dicom.NumberOfFrames} frames")
+        # For multiframe, we only need the single DICOM file
+        return [reference_dicom], reference_dicom.NumberOfFrames, True
+    
+    # Traditional multi-slice series - find all DICOMs from the same series
     series_files = []
     for file in reference_dir.glob('*.dcm'):
         try:
@@ -37,7 +46,7 @@ def load_reference_series(reference_dicom):
     
     # Sort by InstanceNumber (for slice order)
     sorted_files = sorted(series_files, key=lambda x: int(x[0].InstanceNumber))
-    return [dcm for dcm, _ in sorted_files]
+    return [dcm for dcm, _ in sorted_files], len(sorted_files), False
 
 def reorient_nifti_data(nifti_img):
     """
@@ -98,9 +107,8 @@ def nifti_to_dicom(nifti_path, reference_dicom, out_folder, series_uid):
 
         # Load the entire reference series
         logger.info("Loading reference DICOM series...")
-        reference_series = load_reference_series(reference_dicom)
-        n_slices_dicom = len(reference_series)
-        logger.info(f"Loaded {n_slices_dicom} reference DICOM files")
+        reference_series, n_slices_dicom, is_multiframe = load_reference_series(reference_dicom)
+        logger.info(f"Loaded {len(reference_series)} reference DICOM files with {n_slices_dicom} slices/frames")
         
         # Load the NIfTI file
         logger.info(f"Reading NIFTI file: {nifti_path}")
@@ -125,10 +133,25 @@ def nifti_to_dicom(nifti_path, reference_dicom, out_folder, series_uid):
         study_uid = reference_series[0].StudyInstanceUID
         mr_image_storage_uid = "1.2.840.10008.5.1.4.1.1.4"  # MR Image Storage
         
-        # Process each slice
-        for z, ref_dcm in enumerate(reference_series):
-            # Create new DICOM dataset by copying the reference
-            ds = ref_dcm.copy()
+        # Process each slice/frame
+        for z in range(n_slices_dicom):
+            if is_multiframe:
+                # For multiframe DICOM, use the single reference file
+                ref_dcm = reference_series[0]
+                # Create new DICOM dataset by copying the reference
+                ds = ref_dcm.copy()
+                # Remove multiframe-specific attributes
+                if hasattr(ds, 'NumberOfFrames'):
+                    del ds.NumberOfFrames
+                if hasattr(ds, 'PerFrameFunctionalGroupsSequence'):
+                    del ds.PerFrameFunctionalGroupsSequence
+                if hasattr(ds, 'SharedFunctionalGroupsSequence'):
+                    del ds.SharedFunctionalGroupsSequence
+            else:
+                # For traditional series, use the corresponding reference file
+                ref_dcm = reference_series[z]
+                # Create new DICOM dataset by copying the reference
+                ds = ref_dcm.copy()
             
             # Set transfer syntax: explicit VR, little endian
             ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
@@ -147,8 +170,11 @@ def nifti_to_dicom(nifti_path, reference_dicom, out_folder, series_uid):
             ds.SequenceName = 'flair-star'
             ds.ImageType = ['DERIVED', 'SECONDARY']
             
-            # Keep original instance number for slice ordering
-            ds.InstanceNumber = ref_dcm.InstanceNumber
+            # Set instance number for slice ordering
+            if is_multiframe:
+                ds.InstanceNumber = z + 1
+            else:
+                ds.InstanceNumber = ref_dcm.InstanceNumber
             
             # Set Instance Creation Date/Time to current date/time
             now = datetime.now()
