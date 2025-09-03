@@ -133,11 +133,71 @@ def nifti_to_dicom(nifti_path, reference_dicom, out_folder, series_uid):
         study_uid = reference_series[0].StudyInstanceUID
         mr_image_storage_uid = "1.2.840.10008.5.1.4.1.1.4"  # MR Image Storage
         
+        # For multiframe DICOM, extract ALL frame data BEFORE any copying
+        if is_multiframe:
+            ref_dcm = reference_series[0]
+            
+            # Pre-extract all frame data to avoid shallow copy issues
+            frame_data = []
+            for z in range(n_slices_dicom):
+                frame_info = {
+                    'slice_thickness': None,
+                    'pixel_spacing': None,
+                    'image_orientation': None,
+                    'image_position': None,
+                    'slice_location': None
+                }
+                
+                if hasattr(ref_dcm, 'PerFrameFunctionalGroupsSequence') and len(ref_dcm.PerFrameFunctionalGroupsSequence) > z:
+                    frame_group = ref_dcm.PerFrameFunctionalGroupsSequence[z]
+                    logger.debug(f"Pre-extracting frame {z} from PerFrameFunctionalGroupsSequence")
+                    
+                    # Extract PixelMeasuresSequence (contains SliceThickness and PixelSpacing)
+                    if hasattr(frame_group, 'PixelMeasuresSequence'):
+                        pixel_measures = frame_group.PixelMeasuresSequence[0]
+                        if hasattr(pixel_measures, 'SliceThickness'):
+                            frame_info['slice_thickness'] = pixel_measures.SliceThickness
+                        if hasattr(pixel_measures, 'PixelSpacing'):
+                            frame_info['pixel_spacing'] = pixel_measures.PixelSpacing
+                    
+                    # Extract PlaneOrientationSequence (contains ImageOrientationPatient)
+                    if hasattr(frame_group, 'PlaneOrientationSequence'):
+                        plane_orientation = frame_group.PlaneOrientationSequence[0]
+                        if hasattr(plane_orientation, 'ImageOrientationPatient'):
+                            frame_info['image_orientation'] = plane_orientation.ImageOrientationPatient
+                    
+                    # Extract PlanePositionSequence (contains ImagePositionPatient) - THIS IS FRAME-SPECIFIC!
+                    if hasattr(frame_group, 'PlanePositionSequence'):
+                        plane_position = frame_group.PlanePositionSequence[0]
+                        if hasattr(plane_position, 'ImagePositionPatient'):
+                            frame_info['image_position'] = plane_position.ImagePositionPatient
+                            frame_info['slice_location'] = plane_position.ImagePositionPatient[2]
+                            
+                            logger.debug(f"Pre-extracted ImagePositionPatient for frame {z}: {frame_info['image_position']}")
+                
+                # Fallback: try to get attributes from SharedFunctionalGroupsSequence
+                if hasattr(ref_dcm, 'SharedFunctionalGroupsSequence'):
+                    shared_group = ref_dcm.SharedFunctionalGroupsSequence[0]
+                    if hasattr(shared_group, 'PixelMeasuresSequence'):
+                        pixel_measures = shared_group.PixelMeasuresSequence[0]
+                        if hasattr(pixel_measures, 'SliceThickness') and frame_info['slice_thickness'] is None:
+                            frame_info['slice_thickness'] = pixel_measures.SliceThickness
+                        if hasattr(pixel_measures, 'PixelSpacing') and frame_info['pixel_spacing'] is None:
+                            frame_info['pixel_spacing'] = pixel_measures.PixelSpacing
+                
+                frame_data.append(frame_info)
+        
         # Process each slice/frame
         for z in range(n_slices_dicom):
             if is_multiframe:
-                # For multiframe DICOM, use the single reference file
-                ref_dcm = reference_series[0]
+                # Use pre-extracted frame data
+                frame_info = frame_data[z]
+                slice_thickness = frame_info['slice_thickness']
+                pixel_spacing = frame_info['pixel_spacing']
+                image_orientation = frame_info['image_orientation']
+                image_position = frame_info['image_position']
+                slice_location = frame_info['slice_location']
+                
                 # Create new DICOM dataset by copying the reference
                 ds = ref_dcm.copy()
                 # Remove multiframe-specific attributes
@@ -175,6 +235,38 @@ def nifti_to_dicom(nifti_path, reference_dicom, out_folder, series_uid):
                 ds.InstanceNumber = z + 1
             else:
                 ds.InstanceNumber = ref_dcm.InstanceNumber
+            
+            # Set essential spacing and positioning attributes
+            if is_multiframe:
+                # For multiframe DICOMs, use the extracted values
+                if slice_thickness is not None:
+                    ds.SliceThickness = slice_thickness
+                if pixel_spacing is not None:
+                    ds.PixelSpacing = pixel_spacing
+                if image_orientation is not None:
+                    ds.ImageOrientationPatient = image_orientation
+                if image_position is not None:
+                    ds.ImagePositionPatient = image_position
+                if slice_location is not None:
+                    ds.SliceLocation = slice_location
+            else:
+                # For traditional DICOMs, copy attributes directly
+                if hasattr(ref_dcm, 'SliceThickness'):
+                    ds.SliceThickness = ref_dcm.SliceThickness
+                if hasattr(ref_dcm, 'SpacingBetweenSlices'):
+                    ds.SpacingBetweenSlices = ref_dcm.SpacingBetweenSlices
+                if hasattr(ref_dcm, 'PixelSpacing'):
+                    ds.PixelSpacing = ref_dcm.PixelSpacing
+                if hasattr(ref_dcm, 'ImageOrientationPatient'):
+                    ds.ImageOrientationPatient = ref_dcm.ImageOrientationPatient
+            
+            # Handle slice positioning for traditional series (multiframe positioning is handled above)
+            if not is_multiframe:
+                # For traditional series, copy the original positioning
+                if hasattr(ref_dcm, 'ImagePositionPatient'):
+                    ds.ImagePositionPatient = ref_dcm.ImagePositionPatient
+                if hasattr(ref_dcm, 'SliceLocation'):
+                    ds.SliceLocation = ref_dcm.SliceLocation
             
             # Set Instance Creation Date/Time to current date/time
             now = datetime.now()
@@ -221,6 +313,48 @@ def nifti_to_dicom(nifti_path, reference_dicom, out_folder, series_uid):
             ds.WindowWidth = 4095
             ds.RescaleIntercept = 0
             ds.RescaleSlope = 1
+            
+            # Copy additional important attributes for proper 3D reconstruction
+            if hasattr(ref_dcm, 'ImageType'):
+                # Keep original ImageType but mark as derived
+                original_type = list(ref_dcm.ImageType) if isinstance(ref_dcm.ImageType, list) else [str(ref_dcm.ImageType)]
+                ds.ImageType = ['DERIVED', 'SECONDARY'] + original_type[2:] if len(original_type) > 2 else ['DERIVED', 'SECONDARY']
+            
+            # Copy study and patient information
+            if hasattr(ref_dcm, 'StudyDate'):
+                ds.StudyDate = ref_dcm.StudyDate
+            if hasattr(ref_dcm, 'StudyTime'):
+                ds.StudyTime = ref_dcm.StudyTime
+            if hasattr(ref_dcm, 'PatientName'):
+                ds.PatientName = ref_dcm.PatientName
+            if hasattr(ref_dcm, 'PatientID'):
+                ds.PatientID = ref_dcm.PatientID
+            if hasattr(ref_dcm, 'PatientBirthDate'):
+                ds.PatientBirthDate = ref_dcm.PatientBirthDate
+            if hasattr(ref_dcm, 'PatientSex'):
+                ds.PatientSex = ref_dcm.PatientSex
+            if hasattr(ref_dcm, 'PatientAge'):
+                ds.PatientAge = ref_dcm.PatientAge
+            
+            # Copy acquisition parameters
+            if hasattr(ref_dcm, 'AcquisitionDate'):
+                ds.AcquisitionDate = ref_dcm.AcquisitionDate
+            if hasattr(ref_dcm, 'AcquisitionTime'):
+                ds.AcquisitionTime = ref_dcm.AcquisitionTime
+            if hasattr(ref_dcm, 'RepetitionTime'):
+                ds.RepetitionTime = ref_dcm.RepetitionTime
+            if hasattr(ref_dcm, 'EchoTime'):
+                ds.EchoTime = ref_dcm.EchoTime
+            if hasattr(ref_dcm, 'MagneticFieldStrength'):
+                ds.MagneticFieldStrength = ref_dcm.MagneticFieldStrength
+            if hasattr(ref_dcm, 'ScanningSequence'):
+                ds.ScanningSequence = ref_dcm.ScanningSequence
+            if hasattr(ref_dcm, 'SequenceVariant'):
+                ds.SequenceVariant = ref_dcm.SequenceVariant
+            if hasattr(ref_dcm, 'ScanOptions'):
+                ds.ScanOptions = ref_dcm.ScanOptions
+            if hasattr(ref_dcm, 'MRAcquisitionType'):
+                ds.MRAcquisitionType = ref_dcm.MRAcquisitionType
             
             # Save the DICOM file
             output_file = os.path.join(out_folder, f'{series_uid}_{z+1:04d}.dcm')
