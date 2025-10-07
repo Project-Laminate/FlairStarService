@@ -64,11 +64,11 @@ def setup_argparse():
     
     # Check environment variables if command line arguments aren't provided
     if not args.input_dir:
-        args.input_dir = os.environ.get('DATASET_PATH', '/input')
+        args.input_dir = os.environ.get('DATASET_PATH', '/data/input')
         logging.getLogger(__name__).info(f"Using input directory from environment: {args.input_dir}")
     
     if not args.output_dir:
-        args.output_dir = os.environ.get('RESULTS_PATH', '/output')
+        args.output_dir = os.environ.get('RESULTS_PATH', '/data/output')
         logging.getLogger(__name__).info(f"Using output directory from environment: {args.output_dir}")
     
     return args
@@ -269,7 +269,7 @@ def main():
             temp_dir = Path(args.temp_dir)
             logger.info(f"Using specified temporary directory: {temp_dir}")
         else:
-            temp_dir = Path("/tmp") / "flair_star_temp"
+            temp_dir = Path("/data/temp")
             logger.info(f"Using default temporary directory: {temp_dir}")
             
         try:
@@ -359,11 +359,23 @@ def main():
                     settings = load_task_json(args.input_dir)
                     logger.info("Configuration loaded and validated successfully")
             else:
-                # Check environment variables first
+                # Check FLAIRSTAR environment variables first (primary interface)
+                flairstar_swi_uid = os.environ.get('FLAIRSTAR_SWI_SCAN_ID')
+                flairstar_flair_uid = os.environ.get('FLAIRSTAR_FLAIR_SCAN_ID')
+                
+                # Check legacy environment variables for backward compatibility
                 env_swi_uid = os.environ.get('SWI_UID')
                 env_flair_uid = os.environ.get('FLAIR_UID')
                 env_swi_pattern = os.environ.get('SWI_PATTERN')
                 env_flair_pattern = os.environ.get('FLAIR_PATTERN')
+                
+                # Use FLAIRSTAR variables as primary, fall back to legacy if not available
+                if flairstar_swi_uid:
+                    env_swi_uid = flairstar_swi_uid
+                    logger.info("Using FLAIRSTAR_SWI_SCAN_ID environment variable")
+                if flairstar_flair_uid:
+                    env_flair_uid = flairstar_flair_uid
+                    logger.info("Using FLAIRSTAR_FLAIR_SCAN_ID environment variable")
                 
                 if env_swi_uid and env_flair_uid:
                     logger.info(f"Using UIDs from environment variables: SWI='{env_swi_uid}', FLAIR='{env_flair_uid}'")

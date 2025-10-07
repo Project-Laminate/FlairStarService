@@ -7,13 +7,17 @@ mkdir -p "$TEMP_DIR"
 
 echo "-- Starting FLAIR STAR module..."
 
-# Export environment variables
-export DATASET_PATH="${MERCURE_IN_DIR:-/input}"
-export RESULTS_PATH="${MERCURE_OUT_DIR:-/output}"
+# Export FLAIRSTAR environment variables (primary interface)
+export FLAIRSTAR_FLAIR_SCAN_ID="${FLAIRSTAR_FLAIR_SCAN_ID:-}"
+export FLAIRSTAR_SWI_SCAN_ID="${FLAIRSTAR_SWI_SCAN_ID:-}"
+
+# Export legacy environment variables for backward compatibility
+export DATASET_PATH="${MERCURE_IN_DIR:-/data/input}"
+export RESULTS_PATH="${MERCURE_OUT_DIR:-/data/output}"
 export SWI_PATTERN="${SWI_PATTERN:-}"
 export FLAIR_PATTERN="${FLAIR_PATTERN:-}"
-export SWI_UID="${SWI_UID:-}"
-export FLAIR_UID="${FLAIR_UID:-}"
+export SWI_UID="${SWI_UID:-${FLAIRSTAR_SWI_SCAN_ID}}"
+export FLAIR_UID="${FLAIR_UID:-${FLAIRSTAR_FLAIR_SCAN_ID}}"
 export COPY_ALL="${COPY_ALL:-false}"
 export TASK_JSON="${TASK_JSON:-}"
 
@@ -37,14 +41,18 @@ CMD="python3 /app/src/main.py"
 # Add directory parameters if they were provided as arguments
 if [ ! -z "$MERCURE_IN_DIR" ]; then
     CMD="$CMD --input-dir \"$MERCURE_IN_DIR\""
+else
+    CMD="$CMD --input-dir \"/data/input\""
 fi
 
 if [ ! -z "$MERCURE_OUT_DIR" ]; then
     CMD="$CMD --output-dir \"$MERCURE_OUT_DIR\""
+else
+    CMD="$CMD --output-dir \"/data/output\""
 fi
 
 # Add temp directory
-CMD="$CMD --temp-dir \"$TEMP_DIR\""
+CMD="$CMD --temp-dir \"/data/temp\""
 
 # Configuration priority order:
 # 1. TASK_JSON (complete JSON configuration)
